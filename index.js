@@ -1,56 +1,99 @@
 import express from "express";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import "dotenv/config";
 import cors from "cors";
-import { ObjectId } from "mongodb";
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+
 app.use(cors());
 app.use(express.json());
+
+// MongoDB connection
 const client = new MongoClient(process.env.MONGODB_URI);
 
-export async function connectToMongoDB() {
-  try {
-    await client.connect();
-    console.log("You successfully connected to MongoDB!");
-    return client;
-  } catch (err) {
-    console.dir(err);
+let clientPromise;
+
+async function connectToMongoDB() {
+  if (!process.env.MONGODB_URI) {
+    throw new Error("MONGODB_URI is missing");
   }
+
+  if (!clientPromise) {
+    clientPromise = client.connect();
+  }
+
+  await clientPromise;
+
+  return client.db("Togetherly");
 }
-const mongoClient = await connectToMongoDB();
-const db = mongoClient.db("Togetherly");
-const evenCollection = db.collection("createEvent");
-const joinCollection = db.collection("joinEvent");
 
-app.post("/event/create", (req, res) => {
-  const data = req.body;
-  const result = evenCollection.insertOne(data);
-  console.log(result);
-  res.send(result);
+// Home route
+app.get("/", (req, res) => {
+  res.json({ message: "Server is running fine" });
 });
 
-app.post("/event/join", (req, res) => {
-  const data = req.body;
-  const result = joinCollection.insertOne(data);
-  console.log(result);
-  res.send(result);
+// Create event
+app.post("/event/create", async (req, res) => {
+  try {
+    const db = await connectToMongoDB();
+    const result = await db.collection("createEvent").insertOne(req.body);
+
+    res.status(201).json(result);
+  } catch (error) {
+    console.error("Create event error:", error);
+    res.status(500).json({ message: "Failed to create event" });
+  }
 });
 
+// Join event
+app.post("/event/join", async (req, res) => {
+  try {
+    const db = await connectToMongoDB();
+    const result = await db.collection("joinEvent").insertOne(req.body);
+
+    res.status(201).json(result);
+  } catch (error) {
+    console.error("Join event error:", error);
+    res.status(500).json({ message: "Failed to join event" });
+  }
+});
+
+// Get joined events by email
 app.get("/event/join/:userEmail", async (req, res) => {
-  const { userEmail } = req.params;
-  const result = await joinCollection.find({ email: userEmail }).toArray();
-  res.send(result);
+  try {
+    const db = await connectToMongoDB();
+    const { userEmail } = req.params;
+
+    const result = await db
+      .collection("joinEvent")
+      .find({ email: userEmail })
+      .toArray();
+
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Fetch joined events error:", error);
+    res.status(500).json({ message: "Failed to fetch joined events" });
+  }
 });
 
+// Get all events
 app.get("/event", async (req, res) => {
-  const result = await evenCollection.find().toArray();
-  res.send(result);
+  try {
+    const db = await connectToMongoDB();
+
+    const result = await db.collection("createEvent").find().toArray();
+
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Fetch events error:", error);
+    res.status(500).json({ message: "Failed to fetch events" });
+  }
 });
 
+// Get event by ID
 app.get("/event/:id", async (req, res) => {
   try {
+    const db = await connectToMongoDB();
     const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
@@ -59,9 +102,9 @@ app.get("/event/:id", async (req, res) => {
       });
     }
 
-    const result = await evenCollection.findOne({
-      _id: new ObjectId(id),
-    });
+    const result = await db
+      .collection("createEvent")
+      .findOne({ _id: new ObjectId(id) });
 
     if (!result) {
       return res.status(404).json({
@@ -71,19 +114,21 @@ app.get("/event/:id", async (req, res) => {
 
     res.status(200).json(result);
   } catch (error) {
-    console.log(error);
-
+    console.error("Fetch event error:", error);
     res.status(500).json({
       message: "Failed to fetch event",
     });
   }
 });
 
-// http://localhost:5000/event/join
-app.get("/", (req, res) => {
-  res.send({ message: "Server is running fine" });
-});
+// Local development only
+if (!process.env.VERCEL) {
+  const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+// Export Express app for Vercel
+export default app;
